@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar chart</title>
+<style>
+  :root { --ui-bg:#202020; --ui-line:#3a3a3a; --ui-text:#d4d4d4; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #191919; color: var(--ui-text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  #wrap { position: absolute; inset: 0; padding: 12px; }
+  #gear { position: absolute; top: 8px; right: 8px; z-index: 5; width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--ui-line); background: var(--ui-bg); color: var(--ui-text); cursor: pointer; opacity: .25; transition: opacity .15s; font-size: 16px; }
+  #gear:hover, #gear:focus-visible { opacity: 1; }
+  #panel { position: absolute; top: 0; right: 0; bottom: 0; width: min(320px, 100%); z-index: 4; background: var(--ui-bg); border-left: 1px solid var(--ui-line); padding: 48px 16px 16px; overflow-y: auto; transform: translateX(100%); transition: transform .2s; }
+  #panel.open { transform: none; }
+  h2 { font-size: 13px; font-weight: 600; margin: 18px 0 8px; color: #fff; }
+  h2:first-child { margin-top: 0; }
+  .row { display: grid; grid-template-columns: 1fr 110px 36px; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .row.c { grid-template-columns: 1fr 36px 90px; }
+  .row.s { grid-template-columns: 1fr 90px 22px 28px; }
+  .rm { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--ui-line); background: #191919; color: var(--ui-text); cursor: pointer; font-size: 16px; line-height: 1; }
+  .rm:hover:not(:disabled) { background: #3a2323; color: #ff8a8a; }
+  .rm:disabled { opacity: .3; cursor: not-allowed; }
+  button.act:disabled { opacity: .4; cursor: not-allowed; }
+  input[type=text] { width: 100%; background: #191919; color: inherit; border: 1px solid var(--ui-line); border-radius: 6px; padding: 5px 8px; font: inherit; }
+  input[type=color] { width: 36px; height: 28px; padding: 0; border: 1px solid var(--ui-line); border-radius: 6px; background: none; cursor: pointer; }
+  input[type=range] { width: 100%; }
+  .val { text-align: right; font-variant-numeric: tabular-nums; }
+  label.chk { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  button.act { width: 100%; margin-top: 10px; padding: 8px; border-radius: 8px; border: 1px solid var(--ui-line); background: #2a2a2a; color: #fff; font: inherit; cursor: pointer; }
+  button.act:hover { background: #333; }
+  #link { width: 100%; margin-top: 8px; }
+  .hint { color: #8a8a8a; font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="chart"></canvas></div>
+<button id="gear" aria-label="Настройки" aria-expanded="false">⚙</button>
+
+<aside id="panel" aria-label="Настройки графика">
+  <h2>Статы</h2>
+  <div id="stats"></div>
+  <button class="act" id="add" style="margin-top:0;margin-bottom:12px">+ Добавить стат</button>
+  <div class="row"><span>Максимум шкалы</span><input type="range" id="max" min="3" max="20" step="1"><span class="val" id="maxv"></span></div>
+
+  <h2>Цвета</h2>
+  <div id="colors"></div>
+  <div class="row"><span>Прозрачность заливки</span><input type="range" id="fillA" min="0" max="100" step="5"><span class="val" id="fillAv"></span></div>
+  <label class="chk"><input type="checkbox" id="transp"> Прозрачный фон страницы</label>
+  <label class="chk"><input type="checkbox" id="pts"> Точки на вершинах</label>
+  <label class="chk"><input type="checkbox" id="rings"> Многоугольные кольца</label>
+
+  <button class="act" id="copy">Скопировать ссылку для Notion</button>
+  <button class="act" id="reset">Сбросить</button>
+  <input type="text" id="link" readonly aria-label="Ссылка">
+  <p class="hint">Настройки живут в ссылке: сохрани её и вставь в Notion через /embed.</p>
+</aside>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+// ====== НАСТРОЙКИ ПО УМОЛЧАНИЮ (можно менять прямо тут) ======
+const DEFAULTS = {
+  labels: ['Intel', 'Spiritual', 'Core', 'Psyche', 'Physical'],
+  values: [5, 7, 8, 6, 7],
+  max: 10,
+  line: '#3ddc84',   // линия графика
+  fill: '#3ddc84',   // заливка
+  fillA: 35,         // прозрачность заливки, %
+  grid: '#1f6b43',   // сетка и лучи
+  text: '#3ddc84',   // названия статов
+  bg: '#191919',     // фон страницы
+  transp: true,      // прозрачный фон
+  pts: false,        // точки на вершинах
+  rings: true        // кольца-многоугольники (false = круги)
+};
+// ============================================================
+
+const P = new URLSearchParams(location.search);
+const hex = (s, d) => /^[0-9a-f]{6}$/i.test(s || '') ? '#' + s : d;
+const S = {
+  labels: P.get('l') ? P.get('l').split(',').slice(0, 12) : DEFAULTS.labels.slice(),
+  values: P.get('v') ? P.get('v').split(',').map(Number) : DEFAULTS.values.slice(),
+  max: +P.get('max') || DEFAULTS.max,
+  line: hex(P.get('line'), DEFAULTS.line),
+  fill: hex(P.get('fill'), DEFAULTS.fill),
+  fillA: P.has('fa') ? +P.get('fa') : DEFAULTS.fillA,
+  grid: hex(P.get('grid'), DEFAULTS.grid),
+  text: hex(P.get('text'), DEFAULTS.text),
+  bg: hex(P.get('bg'), DEFAULTS.bg),
+  transp: P.has('t') ? P.get('t') === '1' : DEFAULTS.transp,
+  pts: P.has('pt') ? P.get('pt') === '1' : DEFAULTS.pts,
+  rings: P.has('r') ? P.get('r') === '1' : DEFAULTS.rings
+};
+while (S.values.length < S.labels.length) S.values.push(0);
+S.values = S.values.map(n => isNaN(n) ? 0 : n);
+
+const rgba = (h, a) => {
+  const n = parseInt(h.slice(1), 16);
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a / 100})`;
+};
+
+const chart = new Chart(document.getElementById('chart'), {
+  type: 'radar',
+  data: { labels: [], datasets: [{ data: [], borderWidth: 2, pointRadius: 0 }] },
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
+    plugins: { legend: { display: false }, tooltip: { enabled: true } },
+    scales: { r: { beginAtZero: true, ticks: { display: false, stepSize: 1 }, pointLabels: { font: { size: 14, weight: '500' } } } }
+  }
+});
+
+function apply() {
+  document.body.style.background = S.transp ? 'transparent' : S.bg;
+  const ds = chart.data.datasets[0];
+  chart.data.labels = S.labels;
+  ds.data = S.values;
+  ds.borderColor = S.line;
+  ds.backgroundColor = rgba(S.fill, S.fillA);
+  ds.pointRadius = S.pts ? 3 : 0;
+  ds.pointBackgroundColor = S.line;
+  const r = chart.options.scales.r;
+  r.min = 0; r.max = S.max;
+  r.grid = { color: S.grid, circular: !S.rings };
+  r.angleLines = { color: S.grid };
+  r.pointLabels.color = S.text;
+  chart.update();
+}
+
+// ----- панель настроек -----
+const $ = id => document.getElementById(id);
+const statsEl = $('stats'), colorsEl = $('colors');
+
+const MIN_STATS = 3, MAX_STATS = 12;
+
+function buildStats() {
+  statsEl.innerHTML = '';
+  S.labels.forEach((name, i) => {
+    const row = document.createElement('div');
+    row.className = 'row s';
+    row.innerHTML = '<input type="text" aria-label="Название"><input type="range" min="0" step="1" aria-label="Значение"><span class="val"></span><button class="rm" aria-label="Удалить стат" title="Удалить">×</button>';
+    const [t, rg, v, x] = row.children;
+    t.value = name; rg.max = S.max; rg.value = S.values[i]; v.textContent = S.values[i];
+    x.disabled = S.labels.length <= MIN_STATS;
+    t.oninput = () => { S.labels[i] = t.value; apply(); };
+    rg.oninput = () => { S.values[i] = +rg.value; v.textContent = rg.value; apply(); };
+    x.onclick = () => {
+      if (S.labels.length <= MIN_STATS) return;
+      S.labels.splice(i, 1); S.values.splice(i, 1);
+      buildStats(); apply();
+    };
+    statsEl.appendChild(row);
+  });
+  $('add').disabled = S.labels.length >= MAX_STATS;
+}
+
+$('add').onclick = () => {
+  if (S.labels.length >= MAX_STATS) return;
+  S.labels.push('Новый стат');
+  S.values.push(Math.round(S.max / 2));
+  buildStats(); apply();
+  const inputs = statsEl.querySelectorAll('input[type=text]');
+  const last = inputs[inputs.length - 1];
+  last.focus(); last.select();
+};
+
+[['line', 'Линия'], ['fill', 'Заливка'], ['grid', 'Сетка'], ['text', 'Названия'], ['bg', 'Фон страницы']].forEach(([k, name]) => {
+  const row = document.createElement('div');
+  row.className = 'row c';
+  row.innerHTML = `<span>${name}</span><input type="color"><input type="text" maxlength="7" aria-label="${name}, HEX">`;
+  const [, c, t] = row.children;
+  c.id = 'c_' + k; t.id = 't_' + k;
+  c.value = t.value = S[k];
+  c.oninput = () => { S[k] = c.value; t.value = c.value; apply(); };
+  t.oninput = () => { if (/^#[0-9a-f]{6}$/i.test(t.value)) { S[k] = t.value; c.value = t.value; apply(); } };
+  colorsEl.appendChild(row);
+});
+
+function syncControls() {
+  buildStats();
+  ['line', 'fill', 'grid', 'text', 'bg'].forEach(k => { $('c_' + k).value = $('t_' + k).value = S[k]; });
+  $('max').value = S.max; $('maxv').textContent = S.max;
+  $('fillA').value = S.fillA; $('fillAv').textContent = S.fillA + '%';
+  $('transp').checked = S.transp; $('pts').checked = S.pts; $('rings').checked = S.rings;
+}
+
+$('max').oninput = e => { S.max = +e.target.value; $('maxv').textContent = S.max; S.values = S.values.map(n => Math.min(n, S.max)); buildStats(); apply(); };
+$('fillA').oninput = e => { S.fillA = +e.target.value; $('fillAv').textContent = S.fillA + '%'; apply(); };
+$('transp').onchange = e => { S.transp = e.target.checked; apply(); };
+$('pts').onchange = e => { S.pts = e.target.checked; apply(); };
+$('rings').onchange = e => { S.rings = e.target.checked; apply(); };
+
+function makeLink() {
+  const q = new URLSearchParams({
+    l: S.labels.join(','), v: S.values.join(','), max: S.max,
+    line: S.line.slice(1), fill: S.fill.slice(1), fa: S.fillA,
+    grid: S.grid.slice(1), text: S.text.slice(1), bg: S.bg.slice(1),
+    t: +S.transp, pt: +S.pts, r: +S.rings
+  });
+  return location.origin + location.pathname + '?' + q.toString();
+}
+
+$('copy').onclick = async () => {
+  const url = makeLink();
+  $('link').value = url;
+  $('link').select();
+  try { await navigator.clipboard.writeText(url); $('copy').textContent = 'Скопировано'; }
+  catch (e) { $('copy').textContent = 'Скопируй ссылку ниже'; }
+  setTimeout(() => $('copy').textContent = 'Скопировать ссылку для Notion', 1800);
+};
+
+$('reset').onclick = () => {
+  Object.assign(S, JSON.parse(JSON.stringify(DEFAULTS)));
+  syncControls(); apply(); $('link').value = '';
+};
+
+$('gear').onclick = () => {
+  const open = $('panel').classList.toggle('open');
+  $('gear').setAttribute('aria-expanded', open);
+};
+
+if (P.get('panel') === '0') $('gear').style.display = 'none';
+
+syncControls();
+apply();
+</script>
+</body>
+</html>
