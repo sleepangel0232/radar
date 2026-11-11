@@ -18,7 +18,10 @@
   h2:first-child { margin-top: 0; }
   .row { display: grid; grid-template-columns: 1fr 110px 36px; gap: 8px; align-items: center; margin-bottom: 8px; }
   .row.c { grid-template-columns: 1fr 36px 90px; }
-  .row.s { grid-template-columns: 1fr 90px 22px 28px; }
+  .row.s { grid-template-columns: 1fr 80px 56px 28px; }
+  input[type=number] { background: #191919; color: inherit; border: 1px solid var(--ui-line); border-radius: 6px; padding: 5px 6px; font: inherit; width: 100%; }
+  .row.g { grid-template-columns: 1fr auto; }
+  select { width: 100%; background: #191919; color: inherit; border: 1px solid var(--ui-line); border-radius: 6px; padding: 5px 8px; font: inherit; }
   .rm { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--ui-line); background: #191919; color: var(--ui-text); cursor: pointer; font-size: 16px; line-height: 1; }
   .rm:hover:not(:disabled) { background: #3a2323; color: #ff8a8a; }
   .rm:disabled { opacity: .3; cursor: not-allowed; }
@@ -39,10 +42,14 @@
 <button id="gear" aria-label="Настройки" aria-expanded="false">⚙</button>
 
 <aside id="panel" aria-label="Настройки графика">
+  <h2>График</h2>
+  <div class="row g"><select id="chartSel" aria-label="Выбрать график"></select></div>
+  <div class="row g"><input type="text" id="newName" maxlength="30" placeholder="Название нового графика"><button class="act" id="newBtn" style="margin:0;width:auto;padding:5px 10px">Создать</button></div>
+
   <h2>Статы</h2>
   <div id="stats"></div>
   <button class="act" id="add" style="margin-top:0;margin-bottom:12px">+ Добавить стат</button>
-  <div class="row"><span>Максимум шкалы</span><input type="range" id="max" min="3" max="20" step="1"><span class="val" id="maxv"></span></div>
+  <div class="row g"><label for="max">Максимум шкалы</label><input type="number" id="max" min="1" max="1000" step="1" style="width:90px"></div>
 
   <h2>Цвета</h2>
   <div id="colors"></div>
@@ -78,10 +85,16 @@ const DEFAULTS = {
 // ============================================================
 
 const STORE_KEY = 'radar-settings-v1';
+const P0 = new URLSearchParams(location.search);
+const CHART = (P0.get('c') || 'main').slice(0, 30);   // название графика: у каждого свои настройки
+const CHART_KEY = STORE_KEY + ':' + CHART;
 let saved = '';
-try { saved = localStorage.getItem(STORE_KEY) || ''; } catch (e) {}
-// Если в ссылке есть настройки, берём их; если нет, подтягиваем последние сохранённые в этом браузере
-const P = new URLSearchParams(location.search.length > 1 ? location.search : saved);
+try {
+  saved = localStorage.getItem(CHART_KEY) || (CHART === 'main' ? localStorage.getItem(STORE_KEY) : '') || '';
+} catch (e) {}
+// Если в ссылке есть настройки, берём их; если нет, подтягиваем сохранённые для этого графика
+const hasSettings = ['l', 'v', 'max', 'line', 'fill', 'grid', 'text', 'bg'].some(k => P0.has(k));
+const P = new URLSearchParams(hasSettings ? location.search : saved);
 const hex = (s, d) => /^[0-9a-f]{6}$/i.test(s || '') ? '#' + s : d;
 const S = {
   labels: P.get('l') ? P.get('l').split(',').slice(0, 12) : DEFAULTS.labels.slice(),
@@ -126,6 +139,7 @@ function apply() {
   ds.pointBackgroundColor = S.line;
   const r = chart.options.scales.r;
   r.min = 0; r.max = S.max;
+  r.ticks.stepSize = S.max / 10;
   r.grid = { color: S.grid, circular: !S.rings };
   r.angleLines = { color: S.grid };
   r.pointLabels.color = S.text;
@@ -136,7 +150,7 @@ function apply() {
 // Автосохранение: запоминаем настройки в браузере и обновляем адрес страницы
 function persist() {
   const qs = queryString();
-  try { localStorage.setItem(STORE_KEY, qs); } catch (e) {}
+  try { localStorage.setItem(CHART_KEY, qs); } catch (e) {}
   try { history.replaceState(null, '', location.pathname + '?' + qs); } catch (e) {}
 }
 
@@ -151,12 +165,17 @@ function buildStats() {
   S.labels.forEach((name, i) => {
     const row = document.createElement('div');
     row.className = 'row s';
-    row.innerHTML = '<input type="text" aria-label="Название"><input type="range" min="0" step="1" aria-label="Значение"><span class="val"></span><button class="rm" aria-label="Удалить стат" title="Удалить">×</button>';
-    const [t, rg, v, x] = row.children;
-    t.value = name; rg.max = S.max; rg.value = S.values[i]; v.textContent = S.values[i];
+    row.innerHTML = '<input type="text" aria-label="Название"><input type="range" min="0" step="0.5" aria-label="Значение"><input type="number" min="0" step="0.5" aria-label="Точное значение"><button class="rm" aria-label="Удалить стат" title="Удалить">×</button>';
+    const [t, rg, nb, x] = row.children;
+    t.value = name; rg.max = S.max; rg.value = S.values[i]; nb.max = S.max; nb.value = S.values[i];
     x.disabled = S.labels.length <= MIN_STATS;
     t.oninput = () => { S.labels[i] = t.value; apply(); };
-    rg.oninput = () => { S.values[i] = +rg.value; v.textContent = rg.value; apply(); };
+    rg.oninput = () => { S.values[i] = +rg.value; nb.value = rg.value; apply(); };
+    nb.oninput = () => {
+      const n = parseFloat(nb.value.replace(',', '.'));
+      if (isNaN(n)) return;
+      S.values[i] = Math.max(0, n); rg.value = S.values[i]; apply();
+    };
     x.onclick = () => {
       if (S.labels.length <= MIN_STATS) return;
       S.labels.splice(i, 1); S.values.splice(i, 1);
@@ -192,12 +211,24 @@ $('add').onclick = () => {
 function syncControls() {
   buildStats();
   ['line', 'fill', 'grid', 'text', 'bg'].forEach(k => { $('c_' + k).value = $('t_' + k).value = S[k]; });
-  $('max').value = S.max; $('maxv').textContent = S.max;
+  $('max').value = S.max;
   $('fillA').value = S.fillA; $('fillAv').textContent = S.fillA + '%';
   $('transp').checked = S.transp; $('pts').checked = S.pts; $('rings').checked = S.rings;
 }
 
-$('max').oninput = e => { S.max = +e.target.value; $('maxv').textContent = S.max; S.values = S.values.map(n => Math.min(n, S.max)); buildStats(); apply(); };
+$('max').oninput = e => {
+  const m = parseFloat(String(e.target.value).replace(',', '.'));
+  if (!(m >= 1)) return;
+  S.max = Math.min(m, 1000); apply();
+};
+$('max').onchange = e => {
+  // когда закончила вводить: подгоняем значения под шкалу и обновляем ползунки
+  const m = parseFloat(String(e.target.value).replace(',', '.'));
+  S.max = m >= 1 ? Math.min(m, 1000) : S.max;
+  e.target.value = S.max;
+  S.values = S.values.map(n => Math.min(n, S.max));
+  buildStats(); apply();
+};
 $('fillA').oninput = e => { S.fillA = +e.target.value; $('fillAv').textContent = S.fillA + '%'; apply(); };
 $('transp').onchange = e => { S.transp = e.target.checked; apply(); };
 $('pts').onchange = e => { S.pts = e.target.checked; apply(); };
@@ -210,6 +241,7 @@ function queryString() {
     grid: S.grid.slice(1), text: S.text.slice(1), bg: S.bg.slice(1),
     t: +S.transp, pt: +S.pts, r: +S.rings
   });
+  q.set('c', CHART);
   if (P.get('panel') === '0') q.set('panel', '0');
   return q.toString();
 }
@@ -246,8 +278,43 @@ $('gear').onclick = () => {
 
 if (P.get('panel') === '0') $('gear').style.display = 'none';
 
+// ----- несколько графиков: у каждого свои настройки -----
+function listCharts() {
+  const names = new Set([CHART]);
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(STORE_KEY + ':')) names.add(k.slice(STORE_KEY.length + 1));
+    }
+  } catch (e) {}
+  return [...names].sort();
+}
+
+function buildCharts() {
+  const sel = $('chartSel');
+  sel.innerHTML = '';
+  listCharts().forEach(n => {
+    const o = document.createElement('option');
+    o.value = o.textContent = n;
+    o.selected = n === CHART;
+    sel.appendChild(o);
+  });
+}
+
+function openChart(name) {
+  location.search = '?c=' + encodeURIComponent(name);
+}
+
+$('chartSel').onchange = e => openChart(e.target.value);
+$('newBtn').onclick = () => {
+  const n = $('newName').value.trim().slice(0, 30);
+  if (n) openChart(n);
+};
+$('newName').onkeydown = e => { if (e.key === 'Enter') $('newBtn').click(); };
+
 syncControls();
 apply();
+buildCharts();
 </script>
 </body>
 </html>
