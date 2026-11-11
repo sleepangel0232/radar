@@ -51,6 +51,7 @@
   <label class="chk"><input type="checkbox" id="pts"> Точки на вершинах</label>
   <label class="chk"><input type="checkbox" id="rings"> Многоугольные кольца</label>
 
+  <button class="act" id="save">Сохранить настройки</button>
   <button class="act" id="copy">Скопировать ссылку для Notion</button>
   <button class="act" id="reset">Сбросить</button>
   <input type="text" id="link" readonly aria-label="Ссылка">
@@ -76,7 +77,11 @@ const DEFAULTS = {
 };
 // ============================================================
 
-const P = new URLSearchParams(location.search);
+const STORE_KEY = 'radar-settings-v1';
+let saved = '';
+try { saved = localStorage.getItem(STORE_KEY) || ''; } catch (e) {}
+// Если в ссылке есть настройки, берём их; если нет, подтягиваем последние сохранённые в этом браузере
+const P = new URLSearchParams(location.search.length > 1 ? location.search : saved);
 const hex = (s, d) => /^[0-9a-f]{6}$/i.test(s || '') ? '#' + s : d;
 const S = {
   labels: P.get('l') ? P.get('l').split(',').slice(0, 12) : DEFAULTS.labels.slice(),
@@ -125,6 +130,14 @@ function apply() {
   r.angleLines = { color: S.grid };
   r.pointLabels.color = S.text;
   chart.update();
+  persist();
+}
+
+// Автосохранение: запоминаем настройки в браузере и обновляем адрес страницы
+function persist() {
+  const qs = queryString();
+  try { localStorage.setItem(STORE_KEY, qs); } catch (e) {}
+  try { history.replaceState(null, '', location.pathname + '?' + qs); } catch (e) {}
 }
 
 // ----- панель настроек -----
@@ -190,14 +203,19 @@ $('transp').onchange = e => { S.transp = e.target.checked; apply(); };
 $('pts').onchange = e => { S.pts = e.target.checked; apply(); };
 $('rings').onchange = e => { S.rings = e.target.checked; apply(); };
 
-function makeLink() {
+function queryString() {
   const q = new URLSearchParams({
     l: S.labels.join(','), v: S.values.join(','), max: S.max,
     line: S.line.slice(1), fill: S.fill.slice(1), fa: S.fillA,
     grid: S.grid.slice(1), text: S.text.slice(1), bg: S.bg.slice(1),
     t: +S.transp, pt: +S.pts, r: +S.rings
   });
-  return location.origin + location.pathname + '?' + q.toString();
+  if (P.get('panel') === '0') q.set('panel', '0');
+  return q.toString();
+}
+
+function makeLink() {
+  return location.origin + location.pathname + '?' + queryString();
 }
 
 $('copy').onclick = async () => {
@@ -207,6 +225,13 @@ $('copy').onclick = async () => {
   try { await navigator.clipboard.writeText(url); $('copy').textContent = 'Скопировано'; }
   catch (e) { $('copy').textContent = 'Скопируй ссылку ниже'; }
   setTimeout(() => $('copy').textContent = 'Скопировать ссылку для Notion', 1800);
+};
+
+$('save').onclick = () => {
+  persist();
+  $('link').value = makeLink();
+  $('save').textContent = 'Сохранено ✓';
+  setTimeout(() => $('save').textContent = 'Сохранить настройки', 1800);
 };
 
 $('reset').onclick = () => {
